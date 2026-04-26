@@ -73,11 +73,8 @@ def detected_line(img, img_ori, filename):
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
 
         # ====== 繪製結果 ====== 
-        # result_img = img_ori.copy()
         result_img = np.zeros_like(img_ori)
         cv2.line(result_img, p_top, p_bottom, (0, 0, 255), 2) 
-        # cv2.circle(result_img, p_top, 5, (0, 255, 0), -1)
-        # cv2.circle(result_img, p_bottom, 5, (0, 255, 0), -1) 
 
         # print(f"偵測完成！")
         # print(f"頂點: {p_top}, 底點: {p_bottom}")
@@ -107,22 +104,6 @@ def floder_deal(input_dir, output_dir):
         
         # # ======= 讀取血管圖像 ======= 
         ori_filename = filename.replace("_frame", "") 
-        # ori_path = os.path.join(input_dir_ori, ori_filename)
-        # img_ori = cv2.imread(ori_path)
-        
-        # img_ori = resize(img_ori, 900)
-        # img_ori = crop(img_ori)
-        
-        # if img_ori is None:
-        #     print(f"警告：找不到對應的原圖 {filename}，將在 Mask 上繪圖。")
-        #     # vis_img = cv2.cvtColor(img_mask, cv2.COLOR_GRAY2BGR)
-        # else:
-        #     vis_img = img_ori.copy()
-        
-        # if img_mask is None:
-        #     print(f"無法讀取 Mask: {filename}，跳過。")
-        #     continue
-
         vis_img = detected_line(img_mask, img_mask, filename)
 
         # ======= 儲存結果 =======
