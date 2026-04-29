@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 import cv2
 import os
+import math
 import numpy as np
 from matplotlib.pyplot import hsv
 
+
 def apply_clahe(gray):
 
-    # 創建 CLAHE 物件
     clahe = cv2.createCLAHE(
         clipLimit=2.0,
         tileGridSize=(8,8)
@@ -106,13 +106,7 @@ def center_crop(img, size):
 
     return crop
 
-def save_and_classify_frame(frame_to_save, original_frame, frame_name, base_output_path):
-
-    with_ui_dir = os.path.join(base_output_path, "with_ui")
-    no_ui_dir = os.path.join(base_output_path, "no_ui")
-
-    os.makedirs(with_ui_dir, exist_ok=True)
-    os.makedirs(no_ui_dir, exist_ok=True)
+def save_and_classify_frame(frame_to_save, original_frame, frame_name, base_output_path, file_path=None):
 
     h, w = original_frame.shape[:2]
 
@@ -157,16 +151,79 @@ def save_and_classify_frame(frame_to_save, original_frame, frame_name, base_outp
         black_pixels > 300 and
         text_like_contours >= 2
     ):
-        save_path = os.path.join(with_ui_dir, frame_name)
         statue = "with_ui"
     else:
-        save_path = os.path.join(no_ui_dir, frame_name)
+        save_path = os.path.join(base_output_path, frame_name)
+        if file_path:
+            save_path = file_path
+        cv2.imwrite(save_path, frame_to_save)
         statue = "no_ui"
-
-    cv2.imwrite(save_path, frame_to_save)
+        
     return statue
 
-def extract_frames_with_timestamp(video_path, output_dir):
+def detected_line(img):
+
+    # ====== 建立彩色範圍 ======
+    lower_green = np.array([30, 130, 30])
+    upper_green = np.array([95, 255, 255])
+
+    # ====== 抓取符合色彩範圍內的像素成為新影像 ======
+    mask = cv2.inRange(img, lower_green, upper_green) 
+
+    mask = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
+
+    # ====== 形態學處理 ====== 
+    kernel = np.ones((3, 3), np.uint8)
+    mask_dilated = cv2.dilate(mask, kernel, iterations=1)
+
+    # ====== 偵測所有線段 ====== 
+    # rho=1, theta=1度, threshold=20 (因為片段可能很短，門檻設低一點)
+    lines = cv2.HoughLinesP(
+        mask_dilated, 
+        rho=1, 
+        theta=np.pi/180, 
+        threshold=20, 
+        minLineLength=10, 
+        maxLineGap=50  # 這裡設大一點，讓 OpenCV 嘗試自己連線
+    )
+
+    if lines is not None:
+        all_points = []
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            all_points.append((x1, y1))
+            all_points.append((x2, y2))
+
+        #  ====== 關鍵步驟：尋找「最遠兩端點」：找 Y 座標最小（最上方）與最大（最下方）的點 ====== 
+        p_top = min(all_points, key=lambda p: p[1])
+        p_bottom = max(all_points, key=lambda p: p[1])
+
+        # ====== 計算長直線資訊 ====== 
+        x1, y1 = p_top
+        x2, y2 = p_bottom
+        
+        length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+
+        # ====== 繪製結果 ====== 
+        # result_img = img_ori.copy()
+        result_img = np.zeros_like(img)
+        cv2.line(result_img, p_top, p_bottom, (0, 0, 255), 2) 
+        # cv2.circle(result_img, p_top, 5, (0, 255, 0), -1)
+        # cv2.circle(result_img, p_bottom, 5, (0, 255, 0), -1) 
+
+        # print(f"偵測完成！")
+        # print(f"頂點: {p_top}, 底點: {p_bottom}")
+        # print(f"連線總長度: {length:.2f}")
+        # print(f"連線角度: {angle:.2f}")
+
+        return result_img
+    else:
+        print(f"未能偵測到線段，請檢查 mask 是否有內容。")
+        
+    return img
+
+def extract_frames_with_timestamp(video_path, output_dir, output_line_dir, output_name=None):
     # 建立輸出資料夾
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -179,7 +236,7 @@ def extract_frames_with_timestamp(video_path, output_dir):
         return 0
 
     fps = cap.get(cv2.CAP_PROP_FPS)  # 每秒幀數
-    frame_count = -1
+    frame_count = 0
     no_ui_count = 0
     
     while True:
@@ -198,84 +255,36 @@ def extract_frames_with_timestamp(video_path, output_dir):
         
         frame_count += 1
         
-        # 每 10 幀處理一次
-        if frame_count % 25 != 0:
+        # 每 50 幀處理一次
+        if frame_count % 50 != 0:
             continue
 
         # 計算當前幀對應的時間戳（秒）
         time_in_sec = frame_count / fps
         timestamp_str = f"frame_{time_in_sec:.2f}s.png"
-        filename = os.path.join(output_dir, timestamp_str)
+        file_path = os.path.join(output_dir, output_name + f"_{time_in_sec:.2f}s.png") if output_name else os.path.join(output_dir, timestamp_str)
+        line_path = os.path.join(output_line_dir, output_name + f"_{time_in_sec:.2f}s_line.png") if output_name else os.path.join(output_line_dir, f"_{time_in_sec:.2f}s_line.png")
+
         
+        line = detected_line(cropped)
         result = remove_green_red(cropped)
-        result = resize(result, 224)
-        # result = resize_with_padding(result, 224)
-        # result = resize_with_padding(result, 512)
-        # result = center_crop(result, 224)
-        # result = center_crop(result, 512)
+        result = resize_with_padding(result, 224)
         enhanced = apply_clahe(cv2.cvtColor(result, cv2.COLOR_BGR2GRAY))         
 
         # 儲存圖片
-        # cv2.imwrite(filename, enhanced)
-        statue = save_and_classify_frame(enhanced, cropped, timestamp_str, output_dir)
-        # if statue == "no_ui":
-        #     no_ui_count += 1
+        statue = save_and_classify_frame(enhanced, cropped, timestamp_str, output_dir, file_path)
+        if statue == "no_ui":
+            cv2.imwrite(line_path, line)
 
     cap.release()
-    print("所有幀都已成功擷取完成！")
-    print(f"size: {result.shape}")
     return no_ui_count
     
-    
-# --- 主程式 ---
-total_no_ui_count = 0
-# input_folder = "extracted_clips/data2/new"
-# for filename in os.listdir(input_folder):
-#     output_folder = "output/measure_remove_green/classify_test/data2/new/data2_" + filename.split(".")[0]
-#     os.makedirs(output_folder, exist_ok=True)
-#     video_path = os.path.join(input_folder, filename)
-#     total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
 
-input_folder = "extracted_clips/data1"
-for filename in os.listdir(input_folder):
-    output_folder = "output/measure_remove_green/classify_test/data1/data1_" + filename.split(".")[0]
-    os.makedirs(output_folder, exist_ok=True)
-    video_path = os.path.join(input_folder, filename)
-    total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
-    
-input_folder = "extracted_clips/data2"
-for filename in os.listdir(input_folder):
-    output_folder = "output/measure_remove_green/classify_test/data2/data2_" + filename.split(".")[0]
-    os.makedirs(output_folder, exist_ok=True)
-    video_path = os.path.join(input_folder, filename)
-    total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
-    
-input_folder = "extracted_clips/data3"
-for filename in os.listdir(input_folder):
-    output_folder = "output/measure_remove_green/classify_test/data3/data3_" + filename.split(".")[0]
-    os.makedirs(output_folder, exist_ok=True)
-    video_path = os.path.join(input_folder, filename)
-    total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
-    
-input_folder = "extracted_clips/data4"
-for filename in os.listdir(input_folder):
-    output_folder = "output/measure_remove_green/classify_test/data4/data4_" + filename.split(".")[0]
-    os.makedirs(output_folder, exist_ok=True)
-    video_path = os.path.join(input_folder, filename)
-    total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
-    
-input_folder = "extracted_clips/data5"
-for filename in os.listdir(input_folder):
-    output_folder = "output/measure_remove_green/classify_test/data5/data5_" + filename.split(".")[0]
-    os.makedirs(output_folder, exist_ok=True)
-    video_path = os.path.join(input_folder, filename)
-    total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
-    
-input_folder = "extracted_clips/data6"
-for filename in os.listdir(input_folder):
-    output_folder = "output/measure_remove_green/classify_test/data6/data6_" + filename.split(".")[0]
-    os.makedirs(output_folder, exist_ok=True)
-    video_path = os.path.join(input_folder, filename)
-    total_no_ui_count += extract_frames_with_timestamp(video_path, output_folder)
-    
-print(f"總共擷取了 {total_no_ui_count} 張無 UI 的圖片！")
+# input_folder = "data3"
+# for filename in os.listdir(input_folder):
+#     output_folder = "output/Img/"
+#     output_line_folder = "output/line"
+#     os.makedirs(output_folder, exist_ok=True)
+#     os.makedirs(output_line_folder, exist_ok=True)
+#     video_path = os.path.join(input_folder, filename)
+#     extract_frames_with_timestamp(video_path, output_folder, output_line_folder, output_name="data3_" + filename.split(".")[0])
