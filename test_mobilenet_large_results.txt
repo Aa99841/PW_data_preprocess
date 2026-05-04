@@ -1,0 +1,43 @@
+Filename                                     Dice
+-------------------------------------------------------
+data3_clip_154s_5.50s.png                  0.8054
+data3_clip_154s_6.60s.png                  0.4834
+data3_clip_154s_7.70s.png                  0.9141
+data3_clip_177s_7.70s.png                  0.8914
+data3_clip_289s_3.30s.png                  0.9277
+data3_clip_289s_4.40s.png                  0.8952
+data3_clip_289s_5.50s.png                  0.9145
+data3_clip_312s_5.50s.png                  0.8737
+data3_clip_31s_5.50s.png                   0.9214
+data3_clip_31s_6.60s.png                   0.8253
+data3_clip_31s_7.70s.png                   0.8029
+data3_clip_358s_4.40s.png                  0.8414
+data3_clip_36s_1.10s.png                   0.7813
+data3_clip_36s_2.20s.png                   0.8274
+data3_clip_36s_3.30s.png                   0.8273
+data3_clip_36s_4.40s.png                   0.7559
+data3_clip_36s_5.50s.png                   0.7728
+data3_clip_36s_6.60s.png                   0.7496
+data3_clip_36s_7.70s.png                   0.8013
+data3_clip_394s_3.30s.png                  0.7346
+data3_clip_394s_4.40s.png                  0.7237
+data3_clip_394s_5.50s.png                  0.7462
+data3_clip_394s_6.60s.png                  0.7672
+data3_clip_394s_7.70s.png                  0.7550
+data3_clip_405s_1.10s.png                  0.7574
+data3_clip_405s_2.20s.png                  0.7666
+data3_clip_405s_3.30s.png                  0.7760
+data3_clip_405s_4.40s.png                  0.7590
+data3_clip_405s_5.50s.png                  0.7707
+data3_clip_98s_1.10s.png                   0.8490
+data3_clip_98s_2.20s.png                   0.8452
+data3_clip_98s_3.30s.png                   0.8304
+data3_clip_98s_4.40s.png                   0.8302
+data3_clip_98s_5.50s.png                   0.8540
+data3_clip_98s_6.60s.png                   0.9091
+data3_clip_98s_7.70s.png                   0.9067
+-------------------------------------------------------
+Mean ± Std : 0.8109 ± 0.0817
+Min / Max  : 0.4834 / 0.9277
+Count      : 36
+Masks dir  : C:\collega\Project\data\train\predictions_output_large
