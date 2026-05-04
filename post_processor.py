@@ -3,10 +3,7 @@ import cv2
 import os
 import time
 import numpy as np
-from pathlib import Path
-from skimage.morphology import skeletonize
 from skan import Skeleton, summarize
-from skimage.feature import hessian_matrix
 from skimage.morphology import medial_axis
 from scipy.ndimage import distance_transform_edt, label
 from scipy.interpolate import splprep, splev
@@ -35,16 +32,6 @@ def crop(img, x1, x2, y1, y2):
 
     return cropped
 
-def padding_Replication(img):    
-    padded = cv2.copyMakeBorder(
-        img,
-        3, 3, 3, 3,
-        cv2.BORDER_REPLICATE,
-        value=0
-    )
-    
-    return padded
-
 def detected_line(img):
 
     # ====== 建立彩色範圍 ======
@@ -67,85 +54,6 @@ def detected_line(img):
         return p_top, p_bottom
     
     return None, None
-
-def separate_white_regions_advanced(image, min_area=100, 
-                                     distance_threshold=10,
-                                     save_separate=False, 
-                                     output_dir=None,
-                                     visualize=False):
-    """
-    Parameters:
-        image: 輸入的二值圖像
-        min_area: 最小區域面積
-        distance_threshold: 距離閾值，小於此距離的區域可能被視為同一區域
-        save_separate: 是否儲存分離後的圖片
-        output_dir: 輸出目錄
-        visualize: 是否顯示視覺化結果
-    
-    Returns:
-        white_regions: 分離的白色區域列表
-        region_info: 區域資訊
-        is_separated: 是否被隔斷
-    """
-    if len(image.shape) == 3:
-        binary = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        binary = image.copy()
-    
-    _, binary = cv2.threshold(binary, 127, 255, cv2.THRESH_BINARY)
-    
-    # 方法1：使用連通組件找出初始區域
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    
-    # 分析區域之間的關係
-    regions = []
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= min_area:
-            regions.append({
-                'label': i,
-                'area': area,
-                'centroid': centroids[i],
-                'bbox': (stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP],
-                        stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]),
-                'mask': (labels == i).astype(np.uint8) * 255
-            })
-    
-    # 判斷是否有黑色隔斷（多個區域）
-    is_separated = len(regions) > 1
-    
-    return regions, is_separated
-
-def smooth_vessel_mask(mask, method, iterations):
-    """
-    平滑血管 mask 的邊緣
-    
-    Parameters:
-        mask: 輸入的二值遮罩
-        method: 'morphological', 'gaussian', 'bilateral'
-        iterations: 迭代次數
-    """
-    if method == 'morphological':
-        # 形態學平滑（先閉運算再開運算）
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        
-        # # 閉運算：填補小洞
-        # closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=iterations)
-        
-        # 開運算：移除小突起
-        smoothed = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=iterations)
-        
-    elif method == 'gaussian':
-        # 高斯模糊後二值化
-        blurred = cv2.GaussianBlur(mask.astype(np.float32), (20, 20), 0)
-        smoothed = (blurred > 127).astype(np.uint8) * 255
-        
-    elif method == 'bilateral':
-        # 雙邊濾波（保留邊緣）
-        bilateral = cv2.bilateralFilter(mask.astype(np.uint8), 9, 75, 75)
-        smoothed = bilateral
-        
-    return smoothed
 
 def is_valid_centerline(x_pts, y_pts, img_w=224):
     """ 判定中心線合法性並過濾雜訊 """
@@ -291,7 +199,6 @@ def find_RangeGate(start_pt, target_pt, img):
         
     # 3. 沿線搜尋
     last_pt = start_pt
-    # 搜尋的長度不超過到目標點的距離
     for d in np.arange(0, distance, 1.0):
         curr_x = int(start_x + d * ux) 
         curr_y = int(start_y + d * uy)
@@ -305,7 +212,7 @@ def find_RangeGate(start_pt, target_pt, img):
             final_x = int(round(curr_x - ux))
             final_y = int(round(curr_y - uy))
             
-            # 點查是否還在影像內
+            # 檢查是否還在影像內
             final_x = max(0, min(w - 1, final_x))
             final_y = max(0, min(h - 1, final_y))
             return (final_x, final_y)
@@ -331,7 +238,6 @@ def get_boundary_intersection_direct(mask_shape, center_pt, angle_deg):
     dy = np.sin(rad)
     
     # 2. 計算到達四個邊界需要的距離 (d = delta_pos / direction)
-    # 我們只考慮正向 (t > 0)
     distances = []
     
     # 避免除以零
@@ -348,9 +254,7 @@ def get_boundary_intersection_direct(mask_shape, center_pt, angle_deg):
         distances.append((h - 1 - cy) / dy)  # 下邊界
         
     # 3. 找出正向最靠近的距離，以及負向最靠近的距離
-    # 正向距離中最小的正數，就是射線撞到邊框的位置
     t_pos = min([t for t in distances if t > 0])
-    # 負向距離中最大的負數 (絕對值最小)，就是反向射線撞到邊框的位置
     t_neg = max([t for t in distances if t < 0])
     
     # 4. 根據距離回推座標
@@ -442,49 +346,6 @@ def get_direction_by_skan(skeleton_cv, target_point):
     except Exception as e:
         print(f"Skan 方向計算失敗: {e}")
         return np.array([1, 0])
-    
-def get_direction_by_hessian(skeleton_cv, target_point):
-        
-    # 1. 稍微模糊以獲得連續的曲率
-    smoothed = cv2.GaussianBlur(skeleton_cv.astype(np.float32), (5, 5), 0)
-    
-    # 2. 計算 Hessian 矩陣元素 (Hrr, Hrc, Hcc)
-    H = hessian_matrix(smoothed, sigma=1.5, order='rc')
-    Hrr, Hrc, Hcc = H
-    
-    x, y = int(target_point[0]), int(target_point[1])
-    h, w = skeleton_cv.shape
-    y = max(0, min(h - 1, y))
-    x = max(0, min(w - 1, x))
-    
-    # 3. 取得目標點位置的 Hessian 矩陣數值
-    # 矩陣形式為: [[Hrr, Hrc], 
-    #             [Hrc, Hcc]]
-    matrix = np.array([
-        [Hrr[y, x], Hrc[y, x]],
-        [Hrc[y, x], Hcc[y, x]]
-    ])
-    
-    # 4. 計算特徵值與特徵向量
-    try:
-        eigenvalues, eigenvectors = np.linalg.eigh(matrix)
-        
-        idx = np.argmin(np.abs(eigenvalues))
-        v = eigenvectors[:, idx]
-        
-        dy, dx = v[0], v[1]
-        
-        # 5. 正規化向量
-        magnitude = np.sqrt(dx**2 + dy**2)
-        if magnitude < 1e-6:
-            print("Hessian 方向向量過小，回傳水平向量")
-            return np.array([1.0, 0.0])
-            
-        return np.array([dx / magnitude, dy / magnitude])
-        
-    except np.linalg.LinAlgError:
-        print("Hessian 矩陣特徵值計算失敗，回傳水平向量")
-        return np.array([1.0, 0.0])
 
 def calculate_angle_between_vectors(p1, p2, v_given, absolute=False):
     """
@@ -578,7 +439,6 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         image = resize(mask, 900)
         image = crop(image, 0, 900, 100, 800)
         img_ori = resize(img_ori, 900)
-        # img_ori = crop(img_ori, 0, 900, 100, 800)
 
         #  ======= 找線的端點 ======= 
         p_top, p_bottom = detected_line(line)
@@ -598,22 +458,8 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         #  ======= 畫線 ======= 
         lines = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
         cv2.line(lines, p_top, p_bottom, 255, 1) 
-
-        #  ======= 選定骨架化範圍 ======= 
-        # image_crop = crop(image, x1, x2, 0, 700)
-        # image_crop = image.copy()
-            
-        # region, is_separated = separate_white_regions_advanced(image_crop, min_area=100, save_separate=False, visualize=False)
-        # if is_separated:
-        #     image_crop = region[0]['mask']
-
-        # blur = smooth_vessel_mask(image_crop, method='morphological', iterations=10)
-
-        # #  ======= padding ======= 
-        # bin_padR = padding_Replication(blur)
-
-        #  ======= 中心線 =======
-        # centerLine = centerline(bin_padR, w, x1, x2, image)
+        
+        # ======= 生成中心線 =======
         centerLine = process_single_centerline(img_ori, mask)
         img_ori = crop(img_ori, 0, 900, 100, 800)
         centerLine = crop(centerLine, 0, 900, 100, 800)
@@ -623,7 +469,6 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
             continue 
 
         #  ======= 找到中心線與綠線交點 =======
-        # print(f"交點數量: {lines.shape} | centerLine :{centerLine.shape}")
         intersection_mask = cv2.bitwise_and(lines, centerLine)
         points = np.where(intersection_mask == 255)
         points_list = list(zip(points[1], points[0]))
@@ -649,18 +494,6 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         
         # ======== 以原圖處理 ========
         if len(points_list) < 1:
-            # # ======== 切割多塊血管 ========
-            # region, is_separated = separate_white_regions_advanced(image, min_area=100, save_separate=False, visualize=False)
-            # if is_separated:
-            #     image = region[0]['mask']
-
-            # blur = smooth_vessel_mask(image, method='morphological', iterations=10)
-
-            # #  ======= padding ======= 
-            # bin_padR = padding_Replication(blur)
-            
-            # # ======== 中心線 ========
-            # centerLine = centerline(bin_padR, 900, 0, 900, image)
             
             # ======== 找中心線中點 ========
             skel = Skeleton(centerLine > 0)
