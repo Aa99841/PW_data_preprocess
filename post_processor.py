@@ -45,73 +45,6 @@ def padding_Replication(img):
     
     return padded
 
-def pruning_skeleton(skeleton_cv):
-    if not np.any(skeleton_cv > 0):
-        return skeleton_cv
-
-    try:
-        # 1. 將二值化影像轉化為一個圖數據結構，識別端點、分岔點
-        skel = Skeleton(skeleton_cv > 0)
-        
-        # 2. 列出圖中每一條「分支」的資訊
-        stats = summarize(skel, separator='_') 
-        if stats.empty:
-            return skeleton_cv
-        
-        pruned_skeleton = skeleton_cv.copy()
-        
-        junctions = stats[stats['branch_type'] == 2] # 2 代表 節點到節點 (通常主幹中間)
-        tips = stats[stats['branch_type'] == 1]      # 1 代表 端點到節點 (分岔)
-
-        # 找到較短分支剪掉
-        if not tips.empty:
-            tips_sorted = tips.sort_values(by='branch_distance', ascending=False) # 將所有端點分支按長度由長到短排序
-            
-            to_prune = tips_sorted.iloc[2:] # 將第三個頭（分岔）剪掉
-            # to_prune += tips[tips['branch_distance'] < 50]
-
-            for idx in to_prune.index:
-                coords = skel.path_coordinates(idx) # 取得該分支所有像素的座標
-                for r, c in coords.astype(int):
-                    pruned_skeleton[r, c] = 0 
-                    
-        return pruned_skeleton
-
-    except Exception as e:
-        print(f"剪枝失敗: {e}")
-        return skeleton_cv
-    
-def pruning_skeleton_small(skeleton_cv):
-    skeleton_bool = (skeleton_cv > 0)
-
-    skel = Skeleton(skeleton_bool)
-    stats = summarize(skel, separator='_')  
-
-    pruned_skeleton = skeleton_cv.copy()
-    height, width = skeleton_cv.shape
-
-    for _ in range(3): 
-        skel = Skeleton(pruned_skeleton > 0)
-        stats = summarize(skel, separator='_')
-        
-        for i in range(len(stats)):
-            # 這裡記得用你剛修正過的底線符號
-            branch_type = stats.loc[i, 'branch_type']
-            branch_dist = stats.loc[i, 'branch_distance']
-            
-            if branch_type == 1:  # 端點到分岔點
-                coords = skel.path_coordinates(i)
-                endpoint = coords[-1]
-                
-                # 邊界保護邏輯
-                is_near_border = (endpoint[1] < 5) or (endpoint[1] > width - 5)
-                
-                # 如果不是邊界附近的短毛刺，就把它抹除
-                if branch_dist < 30 and not is_near_border:
-                    for r, c in coords.astype(int):
-                        pruned_skeleton[r, c] = 0
-    return pruned_skeleton
-
 def detected_line(img):
 
     # ====== 建立彩色範圍 ======
@@ -213,17 +146,6 @@ def smooth_vessel_mask(mask, method, iterations):
         smoothed = bilateral
         
     return smoothed
-
-def centerline(mask, w, x1, x2, image, method='opencv'):
-    if method == 'opencv':
-        skeleton_cv = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-        # skeleton_cv = pruning_skeleton(skeleton_cv)
-        skeleton_cv = crop(skeleton_cv, 3, 903, 3, 703)
-
-        result_skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-        # result_skeleton[0:700, x1:x2] = skeleton_cv
-    
-    return skeleton_cv
 
 def is_valid_centerline(x_pts, y_pts, img_w=224):
     """ 判定中心線合法性並過濾雜訊 """
