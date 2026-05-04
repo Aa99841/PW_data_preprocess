@@ -634,10 +634,10 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
 
         # ===== 路徑 =====
         line_path = os.path.join(base_line_dir, filename)
-        mask_path = os.path.join(base_mask_dir, filename.replace("_line.png", ".png"))
-        ori_path  = os.path.join(base_ori_dir, filename.replace("_line.png", ".png"))
-        # mask_path = os.path.join(base_mask_dir, filename.replace(".png", "_label.png"))
-        # ori_path  = os.path.join(base_ori_dir, filename)
+        # mask_path = os.path.join(base_mask_dir, filename.replace("_line.png", ".png"))
+        # ori_path  = os.path.join(base_ori_dir, filename.replace("_line.png", ".png"))
+        mask_path = os.path.join(base_mask_dir, filename.replace(".png", "_label.png"))
+        ori_path  = os.path.join(base_ori_dir, filename)
     
         # ===== 讀圖 =====
         line = cv2.imread(line_path)
