@@ -7,6 +7,9 @@ from pathlib import Path
 from skimage.morphology import skeletonize
 from skan import Skeleton, summarize
 from skimage.feature import hessian_matrix
+from skimage.morphology import medial_axis
+from scipy.ndimage import distance_transform_edt, label
+from scipy.interpolate import splprep, splev
 
 def resize(img, size):
 
@@ -214,13 +217,90 @@ def smooth_vessel_mask(mask, method, iterations):
 def centerline(mask, w, x1, x2, image, method='opencv'):
     if method == 'opencv':
         skeleton_cv = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-        skeleton_cv = pruning_skeleton(skeleton_cv)
-        skeleton_cv = crop(skeleton_cv, 3, w+3, 3, 703)
+        # skeleton_cv = pruning_skeleton(skeleton_cv)
+        skeleton_cv = crop(skeleton_cv, 3, 903, 3, 703)
 
         result_skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-        result_skeleton[0:700, x1:x2] = skeleton_cv
+        # result_skeleton[0:700, x1:x2] = skeleton_cv
     
-    return result_skeleton
+    return skeleton_cv
+
+def is_valid_centerline(x_pts, y_pts, img_w=224):
+    """ 判定中心線合法性並過濾雜訊 """
+    if len(x_pts) < 15: return False
+    
+    width = np.max(x_pts) - np.min(x_pts)
+    y_variability = np.sum(np.abs(np.diff(y_pts))) / (width + 1e-6)
+    
+    if width < 20: return False 
+    if y_variability > 1.5: return False
+
+    return True
+
+def process_single_centerline(img_orig, mask_224):
+    """ 處理單一張影像並生成中心線 Mask """
+    
+    # 讀取影像
+    # img_orig = cv2.imread(img_path)
+    # mask_224 = cv2.imread(label_path, 0)
+    
+    # if img_orig is None or mask_224 is None:
+    #     print(f"Error: 無法讀取影像或標籤。檢查路徑: \n{img_path}\n{label_path}")
+    #     return
+
+    h_orig, w_orig = img_orig.shape[:2]
+    scale_x, scale_y = w_orig / 224.0, h_orig / 224.0
+
+    # 建立純黑畫布
+    centerline_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
+
+    # 二值化與標記連通域
+    _, binary_mask = cv2.threshold(mask_224, 127, 255, cv2.THRESH_BINARY)
+    labeled_array, num_features = label(binary_mask > 0)
+    
+    for i in range(1, num_features + 1):
+        single_region = (labeled_array == i)
+        if np.sum(single_region) < 20: continue
+
+        dist_map = distance_transform_edt(single_region)
+        skel_region = medial_axis(single_region)
+        y_idx, x_idx = np.where(skel_region)
+        
+        region_best_pts = {}
+        for x, y in zip(x_idx, y_idx):
+            val = dist_map[y, x]
+            if x not in region_best_pts or val > region_best_pts[x][1]:
+                region_best_pts[x] = (y, val)
+        
+        sorted_x = np.array(sorted(region_best_pts.keys()))
+        sorted_y = np.array([region_best_pts[x][0] for x in sorted_x])
+
+        if not is_valid_centerline(sorted_x, sorted_y):
+            continue
+
+        # 座標縮放
+        pts_scaled = np.column_stack((sorted_x * scale_x, sorted_y * scale_y))
+
+        try:
+            k_val = min(3, len(pts_scaled)-1)
+            tck, u = splprep([pts_scaled[:, 0], pts_scaled[:, 1]], s=len(pts_scaled)*12, k=k_val)
+            u_fine = np.linspace(0, 1, 2000) 
+
+            x_fine, y_fine = splev(u_fine, tck)
+            
+            # 物理級細線繪製
+            for x, y in zip(x_fine, y_fine):
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= ix < w_orig and 0 <= iy < h_orig:
+                    centerline_mask[iy, ix] = 255
+        except Exception as e:
+            print(f"Spline fitting error: {e}")
+            continue
+
+    # 儲存結果
+    # cv2.imwrite(output_path, centerline_mask)
+    # print(f"成功儲存中心線 Mask 至: {output_path}")
+    return centerline_mask
 
 def draw_perpendicular_line(image, line_p1, line_p2, point, length=50, color=(0, 255, 0), thickness=2):
     """
@@ -432,7 +512,10 @@ def get_direction_by_skan(skeleton_cv, target_point):
         # 注意順序：我們回傳 (dx, dy)，對應 (dc, dr)
         direction = np.array([dc / magnitude, dr / magnitude])
         
-        return direction # 回傳 np.array([dx, dy])
+        if direction[0] > 0:
+            return -direction
+        
+        return direction 
 
     except Exception as e:
         print(f"Skan 方向計算失敗: {e}")
@@ -481,7 +564,7 @@ def get_direction_by_hessian(skeleton_cv, target_point):
         print("Hessian 矩陣特徵值計算失敗，回傳水平向量")
         return np.array([1.0, 0.0])
 
-def calculate_angle(p1, p2, v_given, absolute=False):
+def calculate_angle_between_vectors(p1, p2, v_given, absolute=False):
     """
     計算兩點(p1, p2)連線向量與給定向量(v_given)之間的夾角
     :param p1: 點1 (x1, y1)
@@ -516,10 +599,9 @@ def calculate_angle(p1, p2, v_given, absolute=False):
     angle_deg = np.degrees(angle_rad)
     
     if absolute:
-        # 如果你只關心這兩條線「交叉的程度」，不關心方向
-        # 將角度轉為 0~90 度
+        # 將角度轉為 -90 ~ 90 度
         if angle_deg > 90:
-            angle_deg = 180 - angle_deg
+            angle_deg = angle_deg - 180
             
     return angle_deg
 
@@ -574,7 +656,7 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         image = resize(mask, 900)
         image = crop(image, 0, 900, 100, 800)
         img_ori = resize(img_ori, 900)
-        img_ori = crop(img_ori, 0, 900, 100, 800)
+        # img_ori = crop(img_ori, 0, 900, 100, 800)
 
         #  ======= 找線的端點 ======= 
         p_top, p_bottom = detected_line(line)
@@ -596,21 +678,30 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         cv2.line(lines, p_top, p_bottom, 255, 1) 
 
         #  ======= 選定骨架化範圍 ======= 
-        image_crop = crop(image, x1, x2, 0, 700)
+        # image_crop = crop(image, x1, x2, 0, 700)
+        # image_crop = image.copy()
             
-        region, is_separated = separate_white_regions_advanced(image_crop, min_area=100, save_separate=False, visualize=False)
-        if is_separated:
-            image_crop = region[0]['mask']
+        # region, is_separated = separate_white_regions_advanced(image_crop, min_area=100, save_separate=False, visualize=False)
+        # if is_separated:
+        #     image_crop = region[0]['mask']
 
-        blur = smooth_vessel_mask(image_crop, method='morphological', iterations=10)
+        # blur = smooth_vessel_mask(image_crop, method='morphological', iterations=10)
 
-        #  ======= padding ======= 
-        bin_padR = padding_Replication(blur)
+        # #  ======= padding ======= 
+        # bin_padR = padding_Replication(blur)
 
         #  ======= 中心線 =======
-        centerLine = centerline(bin_padR, w, x1, x2, image)
+        # centerLine = centerline(bin_padR, w, x1, x2, image)
+        centerLine = process_single_centerline(img_ori, mask)
+        img_ori = crop(img_ori, 0, 900, 100, 800)
+        centerLine = crop(centerLine, 0, 900, 100, 800)
+        
+        if np.sum(centerLine > 0) == 0:
+            print(f"Warning: {filename}Skeleton is empty, skipping this image.")
+            continue 
 
         #  ======= 找到中心線與綠線交點 =======
+        # print(f"交點數量: {lines.shape} | centerLine :{centerLine.shape}")
         intersection_mask = cv2.bitwise_and(lines, centerLine)
         points = np.where(intersection_mask == 255)
         points_list = list(zip(points[1], points[0]))
@@ -636,18 +727,18 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         
         # ======== 以原圖處理 ========
         if len(points_list) < 1:
-            # ======== 切割多塊血管 ========
-            region, is_separated = separate_white_regions_advanced(image, min_area=100, save_separate=False, visualize=False)
-            if is_separated:
-                image = region[0]['mask']
+            # # ======== 切割多塊血管 ========
+            # region, is_separated = separate_white_regions_advanced(image, min_area=100, save_separate=False, visualize=False)
+            # if is_separated:
+            #     image = region[0]['mask']
 
-            blur = smooth_vessel_mask(image, method='morphological', iterations=10)
+            # blur = smooth_vessel_mask(image, method='morphological', iterations=10)
 
-            #  ======= padding ======= 
-            bin_padR = padding_Replication(blur)
+            # #  ======= padding ======= 
+            # bin_padR = padding_Replication(blur)
             
-            # ======== 中心線 ========
-            centerLine = centerline(bin_padR, 900, 0, 900, image)
+            # # ======== 中心線 ========
+            # centerLine = centerline(bin_padR, 900, 0, 900, image)
             
             # ======== 找中心線中點 ========
             skel = Skeleton(centerLine > 0)
@@ -664,7 +755,7 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
             direction = get_direction_by_skan(centerLine, center)
             
             # ======== 預設線段(-75) ========
-            p_top, p_bottom = get_boundary_intersection_direct(image.shape, center, get_absolute_angle(direction, 105))
+            p_top, p_bottom = get_boundary_intersection_direct(image.shape, center, get_absolute_angle(direction, 60))
             
             lines = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
             cv2.line(lines, p_top, p_bottom, 255, 1) 
@@ -687,9 +778,9 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         result = cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
         
         # 畫骨架
-        # skeleton_color = cv2.cvtColor(centerLine, cv2.COLOR_GRAY2BGR)
-        # skeleton_color[centerLine == 255] = [0, 255, 0]
-        # result = cv2.addWeighted(result, 0.7, skeleton_color, 0.3, 0)
+        skeleton_color = cv2.cvtColor(centerLine, cv2.COLOR_GRAY2BGR)
+        skeleton_color[centerLine == 255] = [0, 255, 0]
+        result = cv2.addWeighted(result, 0.7, skeleton_color, 0.3, 0)
         
         # 畫 Range Gate
         draw_perpendicular_line(result, p_top, p_bottom, intersection_top, length=50, color=(0, 0, 255), thickness=2)
@@ -702,20 +793,22 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         # 畫 beam
         cv2.line(result, p_top, intersection_top, (0, 255, 0), 1)
         cv2.line(result, intersection_bottom, p_bottom, (0, 255, 0), 1)
-        angle = calculate_angle(intersection_top, intersection_bottom, direction)
+        angle = calculate_angle_between_vectors(intersection_bottom, intersection_top, direction, absolute=True)
 
         # ===== 存檔 =====
         save_path = os.path.join(output_dir, filename)
         cv2.imwrite(save_path, result)
         
-        print(f"{filename} | {time.perf_counter()-start:.3f}s | angle: {angle}")
+        # print(f"{filename} | {time.perf_counter()-start:.3f}s | intersection: {len(points_list)}")
+        print(f"{filename} | Angle:  angle: {angle:.2f} degree")
         # print(f"p: {p_top}, {p_bottom} | intersection: {intersection_top}, {intersection_bottom} | center: {center} | len(points_list): {len(points_list)}")
 
-    print("\n=== all finished ===")
+    print("\n=== 全部處理完成 ===")
     
     
     
-# base_line_dir = r"C:\collega\Project\pre_processor\detected_line\line\data5"
-# base_mask_dir = r"C:\collega\Project\post_processor\masks_cleaned"
-# base_ori_dir = r"C:\collega\Project\post_processor\images"
+    
+# base_line_dir = r"C:\collega\Project\data\dealData_post\line\data5"
+# base_mask_dir = r"C:\collega\Project\data\dealData_post\masks_cleaned"
+# base_ori_dir = r"C:\collega\Project\data\dealData_post\images"
 # post_process(base_line_dir, base_mask_dir, base_ori_dir)
