@@ -105,7 +105,7 @@ def center_crop(img, size):
 
     return crop
 
-def save_and_classify_frame(frame_to_save, original_frame, frame_name, base_output_path, file_path=None):
+def save_and_classify_frame(original_frame):
 
     h, w = original_frame.shape[:2]
 
@@ -150,17 +150,11 @@ def save_and_classify_frame(frame_to_save, original_frame, frame_name, base_outp
         black_pixels > 300 and
         text_like_contours >= 2
     ):
-        statue = "with_ui"
+        return "with_ui"
     else:
-        save_path = os.path.join(base_output_path, frame_name)
-        if file_path:
-            save_path = file_path
-        cv2.imwrite(save_path, frame_to_save)
-        statue = "no_ui"
-        
-    return statue
+        return "no_ui"
 
-def detected_line(img):
+def detected_line(img, filename):
 
     # ====== 建立彩色範圍 ======
     lower_green = np.array([30, 130, 30])
@@ -218,14 +212,14 @@ def detected_line(img):
 
         return result_img
     else:
-        print(f"未能偵測到線段，請檢查 mask 是否有內容。")
+        print(f"{filename} 未能偵測到線段")
         
     return img
 
-def extract_frames_with_timestamp(video_path, output_dir, output_line_dir, output_name=None):
+def extract_frames_with_timestamp(video_path, output_name=None):
     # 建立輸出資料夾
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    # if not os.path.exists(output_dir):
+    #     os.makedirs(output_dir)
 
     # 開啟影片檔案
     cap = cv2.VideoCapture(video_path)
@@ -236,48 +230,51 @@ def extract_frames_with_timestamp(video_path, output_dir, output_line_dir, outpu
 
     fps = cap.get(cv2.CAP_PROP_FPS)  # 每秒幀數
     frame_count = 0
-    no_ui_count = 0
+    
+    file_names = []
+    no_ui_frames = []
+    line_frames = []
     
     while True:
         ret, frame = cap.read() # 讀取一幀
         if not ret:
             break  # 讀到結尾
         
-        # 900 * 700
-        x1, y1 = 80, 100
-        x2, y2 = 980, 800
-        
-        # 650 * 650
-        # x1, y1 = 80, 150
-        # x2, y2 = 730, 800
-        cropped = frame[y1:y2, x1:x2]
-        
         frame_count += 1
         
         # 每 50 幀處理一次
         if frame_count % 50 != 0:
             continue
+        
+        # 900 * 700
+        # image_h, image_w = frame.shape[:2]
+        image_h, image_w = 700, 900
+        x1, y1 = 80, 100
+        x2, y2 = 980, 800
+        
+        cropped = frame[y1:y2, x1:x2]
 
         # 計算當前幀對應的時間戳（秒）
         time_in_sec = frame_count / fps
         timestamp_str = f"frame_{time_in_sec:.2f}s.png"
-        file_path = os.path.join(output_dir, output_name + f"_{time_in_sec:.2f}s.png") if output_name else os.path.join(output_dir, timestamp_str)
-        line_path = os.path.join(output_line_dir, output_name + f"_{time_in_sec:.2f}s_line.png") if output_name else os.path.join(output_line_dir, f"_{time_in_sec:.2f}s_line.png")
+        filename = output_name + f"_{time_in_sec:.2f}s.png" if output_name else timestamp_str
+        # line_path = os.path.join(output_line_dir, output_name + f"_{time_in_sec:.2f}s_line.png") if output_name else os.path.join(output_line_dir, f"_{time_in_sec:.2f}s_line.png")
         
         
-        line = detected_line(cropped)
+        line = detected_line(cropped, filename)
         result = remove_green_red(cropped)
         result = resize_with_padding(result, 224)
         enhanced = apply_clahe(cv2.cvtColor(result, cv2.COLOR_BGR2GRAY))         
 
         # 儲存圖片
-        statue = save_and_classify_frame(enhanced, cropped, timestamp_str, output_dir, file_path)
+        statue = save_and_classify_frame(cropped)
         if statue == "no_ui":
-            cv2.imwrite(line_path, line)
+            no_ui_frames.append(enhanced)
+            line_frames.append(line)
+            file_names.append(filename)
 
     cap.release()
-    return no_ui_count
-    
+    return no_ui_frames, line_frames, file_names, image_h, image_w
 
 # input_folder = "data3"
 # for filename in os.listdir(input_folder):
