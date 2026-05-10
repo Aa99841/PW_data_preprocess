@@ -7,7 +7,7 @@ from keras.applications import MobileNetV3Large
 from keras.optimizers import Adam
 import keras.backend as K
 
-from post_merge import post_process
+from post_processor import post_process
 import pre_processor
 import time
 # from tensorflow.keras import layers, models
@@ -78,32 +78,37 @@ def build_mobilenetv3_unet(input_shape=(224, 224, 1), use_attention=False):
     return model
 
 
-def load_test_data(test_dir, target_size=(224, 224)):
-    img_dir = os.path.join(test_dir, "test_images")
-    mask_dir = os.path.join(test_dir, "test_masks")
-    if not os.path.exists(img_dir) or not os.path.exists(mask_dir):
+def load_test_data(test_dir, frames, target_size=(224, 224)):
+    mask_dir = os.path.join(test_dir, "test_masks_3")
+    if not os.path.exists(mask_dir):
         raise FileNotFoundError("cannot find test_data/test_images or test_data/test_masks")
 
-    raw_images, raw_masks, filenames = [], [], []
-    for filename in sorted(os.listdir(img_dir)):
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            continue
-        img_path = os.path.join(img_dir, filename)
-        base_name = filename.rsplit('.', 1)[0]
+    for fname in frames.keys():
+        base_name = fname.rsplit('.', 1)[0]
         mask_path = os.path.join(mask_dir, f"{base_name}_label.png")
 
         if os.path.exists(mask_path):
-            img  = cv2.imdecode(np.fromfile(img_path,  dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
             mask = cv2.imdecode(np.fromfile(mask_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-            if img.shape[:2]  != target_size: img  = cv2.resize(img,  target_size, interpolation=cv2.INTER_AREA)
             if mask.shape[:2] != target_size: mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
-            raw_images.append(img)
-            raw_masks.append(mask)
-            filenames.append(filename)
+            frames[fname]["raw_mask"] = mask
+                
         else:
-            print(f"⚠️ 找不到對應標記圖，跳過: {filename}")
+            print(f"⚠️ 找不到對應標記圖，跳過: {fname}")
+            
+    images = []
+    masks = []
+    filenames = []
 
-    return np.array(raw_images), np.array(raw_masks), filenames
+    for fname, d in frames.items():
+
+        if "raw_mask" not in d:
+            continue
+
+        images.append(d["img"])
+        masks.append(d["raw_mask"])
+        filenames.append(fname)
+
+    return np.array(images), np.array(masks), filenames
 
 
 def preprocess_for_inference(imgs, masks):
@@ -120,29 +125,49 @@ def dice_per_image(y_true, y_pred, smooth=1e-6):
 
 
 if __name__ == "__main__":
-    
     start_time = time.perf_counter()
     
     # C:\collega\Project\data\train\test_data\test_masks
     BASE_DIR   = "C:\\collega\\Project\\data\\train"
-    VIDEO_DIR  = os.path.join(BASE_DIR, "data3")
+    VIDEO_DIR  = os.path.join(BASE_DIR, "input_data/data3")
     TEST_DIR   = os.path.join(BASE_DIR, "test_data")
     LINE_DIR   = os.path.join(TEST_DIR, "line")
-    MODEL_PATH = os.path.join(BASE_DIR, "vessel_lumen_mobilenet_large_unet.h5")
-    PRED_DIR   = os.path.join(BASE_DIR, "predictions_output_large")
+    MODEL_PATH = os.path.join(BASE_DIR, "model/vessel_lumen_mobilenet_large_unet.h5")
+    PRED_DIR   = os.path.join(BASE_DIR, "pred_mask")
+    PRED_DIR   = os.path.join(PRED_DIR, "predictions_output_large")
+    OUTPUT_DIR   = os.path.join(BASE_DIR, "result/line_large")
     
+    frames ={}
+    # filenames = []
+    # all_line_frames = []
+    # all_frames = []
     
+    pre_start_time = time.perf_counter()
     for filename in os.listdir(VIDEO_DIR):
-        output_folder = os.path.join(TEST_DIR, "test_images")
-        output_line_folder = LINE_DIR
-        os.makedirs(output_folder, exist_ok=True)
-        os.makedirs(output_line_folder, exist_ok=True)  
+        # output_folder = os.path.join(TEST_DIR, "test_images")
+        # output_line_folder = LINE_DIR
+        # os.makedirs(output_folder, exist_ok=True)
+        # os.makedirs(output_line_folder, exist_ok=True)  
         video_path = os.path.join(VIDEO_DIR, filename)
-        pre_processor.extract_frames_with_timestamp(video_path, output_folder, output_line_folder, output_name="data3_" + filename.split(".")[0])
+        no_ui_frames, line_frames, file_names, image_h, image_w = pre_processor.extract_frames_with_timestamp(video_path, output_name="data3_" + filename.split(".")[0])
         
+        # filenames.extend(file_names)
+        # all_line_frames.extend(line_frames)
+        # all_frames.extend(no_ui_frames)
+        
+        for img, line, fname in zip(no_ui_frames, line_frames, file_names):
+            frames[fname] = {
+                "img": img,
+                "line": line,
+                "file_name": fname
+            }
+        
+    pre_end_time = time.perf_counter()
+    pre_elapsed_time = pre_end_time - pre_start_time
+    
     print("reading testing data...")
-    raw_imgs, raw_masks, filenames = load_test_data(TEST_DIR)
-    print(f"total {len(raw_imgs)} images")
+    raw_imgs, raw_masks, filenames = load_test_data(TEST_DIR, frames)    
+    print(f"total {len(raw_masks)} images")
 
     X_test, Y_test = preprocess_for_inference(raw_imgs, raw_masks)
 
@@ -151,27 +176,34 @@ if __name__ == "__main__":
     model.load_weights(MODEL_PATH)
 
     print("\ngenerating predicted mask...")
+    model_start_time = time.perf_counter()
+    
     predictions = model.predict(X_test, verbose=0)
+    
+    model_end_time = time.perf_counter()
+    model_elapsed_time = model_end_time - model_start_time
 
     os.makedirs(PRED_DIR, exist_ok=True)
-    result_path = os.path.join(BASE_DIR, "test_mobilenet_large_results.txt")
+    result_path = os.path.join(BASE_DIR, "result/test_mobilenet_large_results.txt")
     dice_scores = []
+    masks = []
 
     with open(result_path, "w", encoding="utf-8") as f:
         header = f"{'Filename':<40} {'Dice':>8}\n" + "-" * 55 + "\n"
         f.write(header)
         print(header, end="")
 
-        for i, fname in enumerate(filenames):
-            d = dice_per_image(Y_test[i], predictions[i])
+        for fname, pred, gt in zip(filenames, predictions, Y_test):
+            d = dice_per_image(gt, pred)
             dice_scores.append(d)
             line = f"{fname:<40} {d:>8.4f}\n"
             f.write(line)
             print(line, end="")
 
-            mask = (predictions[i] > 0.5).astype(np.uint8) * 255
+            mask = (pred > 0.5).astype(np.uint8) * 255
             mask = np.squeeze(mask)
-            cv2.imencode('.png', mask)[1].tofile(os.path.join(PRED_DIR, fname))
+            frames[fname]["pred"] = mask
+            # cv2.imencode('.png', mask)[1].tofile(os.path.join(PRED_DIR, fname))
 
         dice_scores = np.array(dice_scores)
         stats = (
@@ -184,9 +216,18 @@ if __name__ == "__main__":
         f.write(stats)
         print(stats)
         
-        post_process(LINE_DIR, PRED_DIR, TEST_DIR + r"\test_images")
+        
+    post_start_time = time.perf_counter()
+        
+    post_process(frames,image_h, image_w, OUTPUT_DIR)
+    
+    post_end_time = time.perf_counter()
+    post_elapsed_time = post_end_time - post_start_time
 
     print(f"Results saved to {result_path}")
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
-    print(f"times : {elapsed_time:.6f} s")
+    print(f"times : {elapsed_time:.2f} s")
+    print(f"Pre-processing elapsed time: {pre_elapsed_time:.2f} s")
+    print(f"Model elapsed time: {model_elapsed_time:.2f} s")
+    print(f"Post-processing elapsed time: {post_elapsed_time:.2f} s")
