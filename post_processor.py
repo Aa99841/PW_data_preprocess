@@ -404,69 +404,71 @@ def draw_tangent(img, point, direction, length=20):
 
     cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-def post_process(base_line_dir, base_mask_dir, base_ori_dir):
-    output_dir = "result/line"
+def post_process(frames, image_h, image_w, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
+    print(f"總共有 {len(frames)} 張圖片需要後處理...")
 
-    files = [f for f in os.listdir(base_line_dir) if f.endswith('.png')]
-    print(f"{base_line_dir} 總共有 {len(files)} 張圖片需要後處理...")
-
-    for filename in files:
+    for fname in frames.keys():
         start = time.perf_counter()
 
         # ===== 路徑 =====
-        line_path = os.path.join(base_line_dir, filename)
+        # line_path = os.path.join(base_line_dir, filename)
         # mask_path = os.path.join(base_mask_dir, filename.replace("_line.png", ".png"))
         # ori_path  = os.path.join(base_ori_dir, filename.replace("_line.png", ".png"))
-        mask_path = os.path.join(base_mask_dir, filename.replace(".png", "_label.png"))
-        ori_path  = os.path.join(base_ori_dir, filename)
+        # mask_path = os.path.join(base_mask_dir, filename.replace(".png", "_label.png"))
+        # ori_path  = os.path.join(base_ori_dir, filename)
     
         # ===== 讀圖 =====
-        line = cv2.imread(line_path)
-        mask = cv2.imread(mask_path, 0)
-        img_ori = cv2.imread(ori_path, 0)
+        line = frames[fname].get("line", None)
+        mask = frames[fname].get("raw_mask", None)
+        img_ori = frames[fname].get("img", None)
 
         if line is None or mask is None:
-            print(f"跳過 {filename}")
+            print(f"跳過 {fname}")
             continue
 
         if img_ori is None:
-            print(f"找不到 {ori_path}")
+            print(f"找不到 {fname} 的原圖")
             img_ori = mask.copy()
 
         #  ======= 224 -> 900*700 ======= 
-        image = resize(mask, 900)
-        image = crop(image, 0, 900, 100, 800)
-        img_ori = resize(img_ori, 900)
+        if image_h > image_w:
+            img_ori = resize(img_ori, image_h)
+            image = resize(mask, image_h)
+            width_pad = (image_h - image_w) // 2
+            image = crop(image, width_pad, width_pad + image_w, 0, image_h)
+        else:
+            img_ori = resize(img_ori, image_w)
+            image = resize(mask, image_w)
+            width_pad = (image_w - image_h) // 2
+            image = crop(image, 0, image_w, width_pad, width_pad + image_h)
 
-        #  ======= 找線的端點 ======= 
-        p_top, p_bottom = detected_line(line)
-        if p_top is None or p_bottom is None:
-            print(f"{filename} 沒有找到線段")
-            continue
-
-        if p_top[0] > p_bottom[0]:
-            x1 = p_bottom[0] - 20
-            x2 = p_top[0] + 20
-            w = x2 - x1
-        else :
-            x1 = p_top[0] - 20
-            x2 = p_bottom[0] + 20
-            w = x2 - x1
-
-        #  ======= 畫線 ======= 
-        lines = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-        cv2.line(lines, p_top, p_bottom, 255, 1) 
         
         # ======= 生成中心線 =======
         centerLine = process_single_centerline(img_ori, mask)
-        img_ori = crop(img_ori, 0, 900, 100, 800)
-        centerLine = crop(centerLine, 0, 900, 100, 800)
+        if image_h > image_w:
+            width_pad = (image_h - image_w) // 2
+            img_ori = crop(img_ori, width_pad, width_pad + image_w, 0, image_h)
+            centerLine = crop(centerLine, width_pad, width_pad + image_w, 0, image_h)
+        else:
+            width_pad = (image_w - image_h) // 2
+            img_ori = crop(img_ori, 0, image_w, width_pad, width_pad + image_h)
+            centerLine = crop(centerLine, 0, image_w, width_pad, width_pad + image_h)
         
         if np.sum(centerLine > 0) == 0:
-            print(f"Warning: {filename}Skeleton is empty, skipping this image.")
+            print(f"Warning: {fname}Skeleton is empty, skipping this image.")
             continue 
+        
+        #  ======= 找線的端點 ======= 
+        p_top, p_bottom = detected_line(line)
+        if p_top is None or p_bottom is None:
+            print(f"{fname} 未能偵測到線段")
+            continue
+
+        #  ======= 畫線 ======= 
+        lines = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+        cv2.line(lines, p_top, p_bottom, 255, 1)
 
         #  ======= 找到中心線與綠線交點 =======
         intersection_mask = cv2.bitwise_and(lines, centerLine)
@@ -492,7 +494,7 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
                 intersection_top = find_RangeGate(center, in_top, image)
                 intersection_bottom = find_RangeGate(center, in_bottom, image)
         
-        # ======== 以原圖處理 ========
+        # ======== 以原圖處理 ========     
         if len(points_list) < 1:
             
             # ======== 找中心線中點 ========
@@ -551,11 +553,11 @@ def post_process(base_line_dir, base_mask_dir, base_ori_dir):
         angle = calculate_angle_between_vectors(intersection_bottom, intersection_top, direction, absolute=True)
 
         # ===== 存檔 =====
-        save_path = os.path.join(output_dir, filename)
+        save_path = os.path.join(output_dir, fname)
         cv2.imwrite(save_path, result)
         
         # print(f"{filename} | {time.perf_counter()-start:.3f}s | intersection: {len(points_list)}")
-        print(f"{filename} | Angle:  angle: {angle:.2f} degree")
+        print(f"{fname} | Angle:  angle: {angle:.2f} degree | range gate: {intersection_top}, {intersection_bottom}")
         # print(f"p: {p_top}, {p_bottom} | intersection: {intersection_top}, {intersection_bottom} | center: {center} | len(points_list): {len(points_list)}")
 
     print("\n=== 全部處理完成 ===")
